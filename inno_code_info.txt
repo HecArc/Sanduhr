@@ -1,0 +1,95 @@
+#include <Wire.h>
+#include <SPI.h>
+#include <math.h> // für atan2 und sqrt
+
+// -------------------- MAX7219 --------------------
+#define DIN_PIN  17
+#define CLK_PIN  18
+#define CS_PIN   16
+
+// MAX7219 Register
+#define REG_DIGIT0      0x01
+#define REG_DECODEMODE  0x09
+#define REG_INTENSITY   0x0A
+#define REG_SCANLIMIT   0x0B
+#define REG_SHUTDOWN    0x0C
+#define REG_DISPLAYTEST 0x0F
+
+void sendCommand(byte reg, byte data) {
+  digitalWrite(CS_PIN, LOW);
+  SPI.transfer(reg);
+  SPI.transfer(data);
+  digitalWrite(CS_PIN, HIGH);
+}
+
+void setupMAX7219() {
+  pinMode(CS_PIN, OUTPUT);
+  SPI.begin(CLK_PIN, -1, DIN_PIN, CS_PIN);
+
+  sendCommand(REG_DISPLAYTEST, 0x00); // Test aus
+  sendCommand(REG_SCANLIMIT, 0x07);   // 8 Reihen
+  sendCommand(REG_DECODEMODE, 0x00);  // Matrix-Modus
+  sendCommand(REG_INTENSITY, 0x08);   // Helligkeit
+  sendCommand(REG_SHUTDOWN, 0x01);    // Normalbetrieb
+}
+
+// -------------------- MPU6050 --------------------
+#define MPU_ADDR 0x68
+#define PWR_MGMT_1 0x6B
+#define ACCEL_XOUT_H 0x3B
+#define ACCEL_YOUT_H 0x3D
+#define ACCEL_ZOUT_H 0x3F
+
+#define SDA_PIN 21
+#define SCL_PIN 20
+
+void setupMPU6050() {
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(PWR_MGMT_1);
+  Wire.write(0); // aus Schlafmodus
+  Wire.endTransmission(true);
+}
+
+int16_t readMPU16(byte reg) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 2, true);
+  return (Wire.read() << 8) | Wire.read();
+}
+
+// -------------------- Pitch berechnen --------------------
+float getPitch(int16_t ax, int16_t ay, int16_t az) {
+  return atan2(ax, sqrt(ay*ay + az*az)) * 180.0 / 3.14159;
+}
+
+// -------------------- Setup --------------------
+void setup() {
+  Serial.begin(115200);
+  setupMAX7219();
+  setupMPU6050();
+  Serial.println("Matrix zeigt Pitch, MPU6050 bereit");
+}
+
+// -------------------- Loop --------------------
+void loop() {
+  int16_t ax = readMPU16(ACCEL_XOUT_H);
+  int16_t ay = readMPU16(ACCEL_YOUT_H);
+  int16_t az = readMPU16(ACCEL_ZOUT_H);
+
+  float pitch = getPitch(ax, ay, az);
+  Serial.print("Pitch: ");
+  Serial.println(pitch);
+
+  // Pitch auf Zeile 0-7 mappen
+  int row = map(pitch, -90, 90, 0, 7);
+
+  // Matrix Zeilen setzen: nur die Zeile mit der Neigung leuchtet
+  for (int i = 0; i < 8; i++) {
+    if (i == row) sendCommand(REG_DIGIT0 + i, 0xFF);
+    else sendCommand(REG_DIGIT0 + i, 0x00);
+  }
+
+  delay(100); // kleine Verzögerung für flüssige Bewegung
+}
